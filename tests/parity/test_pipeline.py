@@ -12,7 +12,8 @@ import os
 import numpy as np
 import pytest
 
-from rife_mlx.pipeline_mlx import interpolate_pair, interpolate_sequence
+from rife_mlx import pipeline_mlx
+from rife_mlx.pipeline_mlx import interpolate_pair, interpolate_sequence, interpolate_stream
 from rife_mlx.utils.weights import build_model
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -37,6 +38,71 @@ def test_sequence_frame_count(model):
     for multi in (2, 3, 4):
         out = interpolate_sequence(model, frames, multi=multi)
         assert len(out) == (len(frames) - 1) * multi + 1
+
+
+def test_interpolate_stream_is_lazy_and_preserves_order(monkeypatch):
+    consumed = []
+
+    def source():
+        for value in (0, 10, 20):
+            consumed.append(value)
+            yield np.full((2, 3, 3), value, dtype=np.uint8)
+
+    class FakeModel:
+        def prepare(self, frame, scale):
+            assert scale == 1.0
+            return frame
+
+        def inference_prepared(self, a, b, timestep):
+            return a * (1 - timestep) + b * timestep
+
+    output = interpolate_stream(FakeModel(), source(), multi=2)
+
+    first = next(output)
+    assert int(first[0, 0, 0]) == 0
+    assert consumed == [0, 10]
+    values = [int(frame[0, 0, 0]) for frame in output]
+    assert values == [5, 10, 15, 20]
+    assert consumed == [0, 10, 20]
+
+
+def test_interpolate_stream_handles_empty_and_single_frame():
+    assert list(interpolate_stream(None, iter(()))) == []
+    frame = np.zeros((2, 3, 3), dtype=np.uint8)
+    assert list(interpolate_stream(None, iter((frame,)))) == [frame]
+    with pytest.raises(ValueError, match="multi must be >= 1"):
+        next(interpolate_stream(None, (), multi=0))
+
+
+def test_interpolate_stream_caches_each_input_once(monkeypatch):
+    frames = [np.full((2, 3, 3), value, dtype=np.uint8) for value in (0, 20, 40)]
+
+    class FakeModel:
+        def __init__(self):
+            self.prepared = []
+
+        def prepare(self, frame, scale):
+            self.prepared.append((frame, scale))
+            return frame
+
+        def inference_prepared(self, frame0, frame1, timestep):
+            return frame0 * (1 - timestep) + frame1 * timestep
+
+    monkeypatch.setattr(pipeline_mlx, "_to_nhwc", lambda frame: frame.astype(float))
+    monkeypatch.setattr(pipeline_mlx, "_to_u8", lambda frame: frame.astype(np.uint8))
+    monkeypatch.setattr(pipeline_mlx.mx, "eval", lambda *args: None)
+    model = FakeModel()
+
+    output = list(interpolate_stream(model, iter(frames), multi=4, scale=0.5))
+    assert [int(frame[0, 0, 0]) for frame in output] == [0, 5, 10, 15, 20, 25, 30, 35, 40]
+    assert len(model.prepared) == len(frames)
+    assert all(scale == 0.5 for _frame, scale in model.prepared)
+
+
+def test_interpolate_stream_multi_one_bypasses_model():
+    frames = [np.full((2, 3, 3), value, dtype=np.uint8) for value in (0, 20, 40)]
+    output = list(interpolate_stream(None, iter(frames), multi=1))
+    assert output == frames
 
 
 @pytest.mark.parametrize("H,W,scale", [

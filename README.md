@@ -30,17 +30,25 @@ Flags: `-m`/`--multi N` (insert N-1 frames/pair, output fps ×N) · `-t`/`--time
 (image-pair timestep) · `-s`/`--scale {0.25,0.5,1.0,2.0,4.0}` · `-n`/`--version`
 (default `4.25`) · `--weights_dir` local override. `-o`/`--output` is required.
 
+Video processing streams decoded and generated frames and caches image features
+for the current pair. Memory use does not grow with video duration.
+
 ## Python
 
 ```python
 from rife_mlx.utils.weights import build_model
-from rife_mlx.pipeline_mlx import interpolate_pair, interpolate_sequence
+from rife_mlx.pipeline_mlx import interpolate_pair, interpolate_stream
+from rife_mlx.video import iter_frames, probe_fps, write_video
 
 model = build_model("4.25")                                  # auto-downloads from mlx-community
 mid = interpolate_pair(model, frame_a, frame_b, timestep=0.5)   # HWC uint8
-# whole list of HWC uint8 frames -> multi-1 inserted per pair:
-frames_out = interpolate_sequence(model, frames, multi=2, scale=1.0)
+# Stream HWC uint8 frames with cached features:
+frames_out = interpolate_stream(model, iter_frames("input.mp4"), multi=2, scale=1.0)
+write_video("output.mp4", frames_out, probe_fps("input.mp4") * 2,
+            audio_from="input.mp4")
 ```
+
+`interpolate_sequence` remains available to collect the same stream into a list.
 
 ## Parity
 

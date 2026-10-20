@@ -103,16 +103,23 @@ class IFNet(nn.Module):
         self.block4 = IFBlock(8 + 4 + 8 + 8, c=32)
         self.encode = Head()
 
-    def __call__(self, x, timestep=0.5, scale_list=(16, 8, 4, 2, 1)):
-        """x: [N,H,W,6] (img0|img1 on channel axis). Returns (flow_list, mask, merged)."""
+    def __call__(self, x, timestep=0.5, scale_list=(16, 8, 4, 2, 1), *,
+                 f0=None, f1=None):
+        """x: [N,H,W,6] (img0|img1). Returns (flow_list, mask, merged).
+
+        Optional f0/f1 must be this model's encoded features for the respective
+        padded input images. Omitted features are computed as usual.
+        """
         channel = x.shape[-1] // 2
         img0 = x[..., :channel]
         img1 = x[..., channel:]
         N, H, W, _ = img0.shape
         timestep = mx.full((N, H, W, 1), float(timestep))
 
-        f0 = self.encode(img0[..., :3])
-        f1 = self.encode(img1[..., :3])
+        if f0 is None:
+            f0 = self.encode(img0[..., :3])
+        if f1 is None:
+            f1 = self.encode(img1[..., :3])
         flow_list, merged, mask_list = [], [], []
         warped_img0, warped_img1 = img0, img1
         flow = None
